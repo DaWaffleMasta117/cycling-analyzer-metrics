@@ -8,25 +8,22 @@ pub fn get_rides_for_athlete(
     from: Option<&str>,
     to: Option<&str>,
 ) -> Result<Vec<Ride>> {
-    let mut query = String::from(
+    let query =
         "SELECT
-            id,
-            athlete_id,
-            moving_time_seconds,
-            average_power_watts,
-            max_power_watts,
-            start_date,
-            weight_kg_at_time
+            Id,
+            AthleteId,
+            MovingTimeSeconds,
+            AveragePowerWatts,
+            MaxPowerWatts,
+            StartDate,
+            WeightKgAtTime
          FROM Rides
-         WHERE athlete_id = ?1"
-    );
+         WHERE AthleteId = ?1
+           AND (?2 IS NULL OR StartDate >= ?2)
+           AND (?3 IS NULL OR StartDate <= ?3)
+         ORDER BY StartDate DESC";
 
-    // Append date filters if provided
-    if from.is_some() { query.push_str(" AND start_date >= ?2"); }
-    if to.is_some() { query.push_str(" AND start_date <= ?3"); }
-    query.push_str(" ORDER BY start_date DESC");
-
-    let mut stmt = conn.prepare(&query)?;
+    let mut stmt = conn.prepare(query)?;
 
     let rides = stmt.query_map(
         params![athlete_id, from, to],
