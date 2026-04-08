@@ -1,15 +1,33 @@
+use std::collections::HashMap;
 use crate::models::{PowerCurvePoint, Ride};
 
 // Standard durations that match the frontend constants exactly
 pub const DURATIONS: &[u32] = &[
-    1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 10800, 21600,
+    3, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 10800, 21600,
 ];
 
-pub fn calculate_power_curve(rides: &[Ride], weight_kg: f32) -> Vec<PowerCurvePoint> {
+/// Computes the Mean Maximal Power (MMP) curve from second-by-second power streams.
+///
+/// For each standard duration D, every ride whose stream length >= D is considered.
+/// Within each qualifying ride a sliding window of size D scans the stream and the
+/// highest average over any consecutive D seconds is recorded.  The best value
+/// across all qualifying rides becomes the curve point for that duration.
+///
+/// Rides shorter than D are excluded entirely, so durations with no qualifying
+/// rides return 0 — this keeps the curve honest (no extrapolation from shorter
+/// efforts).
+///
+/// Null samples (power meter dropouts, coasting) are treated as 0 W, which is
+/// the convention used by WKO, TrainingPeaks, and most other MMP implementations.
+pub fn calculate_power_curve(
+    rides: &[Ride],
+    streams: &HashMap<i64, Vec<Option<i32>>>,
+    weight_kg: f32,
+) -> Vec<PowerCurvePoint> {
     DURATIONS
         .iter()
         .map(|&duration| {
-            let best_watts = best_average_power(rides, duration);
+            let best_watts = best_power_for_duration(rides, streams, duration);
             PowerCurvePoint {
                 duration_seconds: duration,
                 watts:            best_watts,
@@ -23,35 +41,43 @@ pub fn calculate_power_curve(rides: &[Ride], weight_kg: f32) -> Vec<PowerCurvePo
         .collect()
 }
 
-// Finds the best average power across all rides for a given duration
-fn best_average_power(rides: &[Ride], duration_seconds: u32) -> f32 {
+/// Returns the highest sliding-window average across all rides whose stream is
+/// at least `duration_seconds` long.  Returns 0.0 if no ride qualifies.
+fn best_power_for_duration(
+    rides: &[Ride],
+    streams: &HashMap<i64, Vec<Option<i32>>>,
+    duration_seconds: u32,
+) -> f32 {
+    let dur = duration_seconds as usize;
     rides
         .iter()
-        .filter_map(|ride| estimate_power_for_duration(ride, duration_seconds))
+        .filter_map(|ride| {
+            let stream = streams.get(&ride.id)?;
+            best_window_average(stream, dur)
+        })
         .fold(0.0_f32, f32::max)
 }
 
-// Estimates best power for a duration from a ride's summary data
-//
-// NOTE: This is an estimation from summary data. When we have access
-// to raw power streams from the Strava API we can replace this with
-// an exact calculation using a sliding window over the data points.
-fn estimate_power_for_duration(ride: &Ride, duration_seconds: u32) -> Option<f32> {
-    let ride_duration = ride.moving_time_seconds as u32;
+/// Finds the highest average power over any `window`-length consecutive slice
+/// of `watts` using prefix sums (O(n)).
+///
+/// Returns `None` if the stream is shorter than `window`.
+/// Null samples are treated as 0 W.
+fn best_window_average(watts: &[Option<i32>], window: usize) -> Option<f32> {
+    if watts.len() < window {
+        return None;
+    }
 
-    // Skip rides shorter than the duration we're looking for
-    if ride_duration < duration_seconds { return None; }
+    // Build prefix sums (treating None as 0) so any window sum is O(1).
+    let mut prefix: Vec<i64> = vec![0i64; watts.len() + 1];
+    for (i, &w) in watts.iter().enumerate() {
+        prefix[i + 1] = prefix[i] + w.unwrap_or(0) as i64;
+    }
 
-    // Skip rides with no power data
-    if ride.average_power_watts <= 0.0 { return None; }
+    let best_sum = (0..=(watts.len() - window))
+        .map(|i| prefix[i + window] - prefix[i])
+        .max()?;
 
-    // For durations shorter than the ride we use the critical power model
-    // to estimate what the athlete could sustain for that duration.
-    // Formula: P(t) = avg_power * (ride_duration / duration)^0.07
-    // The 0.07 exponent is a well established empirical constant for
-    // the power-duration relationship in cycling.
-    let ratio = ride_duration as f32 / duration_seconds as f32;
-    let watts = ride.average_power_watts * ratio.powf(0.07);
-
-    Some((watts * 10.0).round() / 10.0) // round to 1 decimal place
+    let avg = best_sum as f32 / window as f32;
+    Some((avg * 10.0).round() / 10.0)
 }
