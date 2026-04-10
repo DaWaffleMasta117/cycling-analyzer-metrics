@@ -34,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(handlers::health))
         .route("/power-curve", get(handlers::get_power_curve))
+        .route("/ride-stats", get(handlers::get_ride_stats_handler))
         .layer(cors)
         .with_state(state);
 

@@ -34,9 +34,10 @@ pub fn calculate_power_curve(
         .par_iter()
         .filter_map(|ride| {
             let stream = streams.get(&ride.id)?;
+            let prefix = build_prefix(stream);
             let mut best = [0.0_f32; DURATIONS.len()];
             for (i, &duration) in DURATIONS.iter().enumerate() {
-                if let Some(avg) = best_window_average(stream, duration as usize) {
+                if let Some(avg) = best_window_average(&prefix, stream.len(), duration as usize) {
                     best[i] = avg;
                 }
             }
@@ -70,23 +71,27 @@ pub fn calculate_power_curve(
         .collect()
 }
 
-/// Finds the highest average power over any `window`-length consecutive slice
-/// of `watts` using prefix sums (O(n)).
-///
-/// Returns `None` if the stream is shorter than `window`.
-/// Null samples are treated as 0 W.
-fn best_window_average(watts: &[Option<i32>], window: usize) -> Option<f32> {
-    if watts.len() < window {
-        return None;
-    }
-
-    // Build prefix sums (treating None as 0) so any window sum is O(1).
-    let mut prefix: Vec<i64> = vec![0i64; watts.len() + 1];
+/// Builds a prefix-sum array from a nullable power stream (treating None as 0 W).
+/// The returned vec has length `stream.len() + 1`, with `prefix[0] == 0`.
+fn build_prefix(watts: &[Option<i32>]) -> Vec<i64> {
+    let mut prefix = vec![0i64; watts.len() + 1];
     for (i, &w) in watts.iter().enumerate() {
         prefix[i + 1] = prefix[i] + w.unwrap_or(0) as i64;
     }
+    prefix
+}
 
-    let best_sum = (0..=(watts.len() - window))
+/// Finds the highest average power over any `window`-length consecutive slice
+/// using a pre-built prefix-sum array (O(n) over the stream, O(1) per window).
+///
+/// `stream_len` must equal `prefix.len() - 1`.
+/// Returns `None` if the stream is shorter than `window`.
+fn best_window_average(prefix: &[i64], stream_len: usize, window: usize) -> Option<f32> {
+    if stream_len < window {
+        return None;
+    }
+
+    let best_sum = (0..=(stream_len - window))
         .map(|i| prefix[i + window] - prefix[i])
         .max()?;
 
