@@ -55,11 +55,12 @@ pub fn get_rides_for_athlete(
 
 /// Returns aggregate power statistics for an athlete within an optional date range.
 ///
-/// - `peak_avg_watts` / `mean_avg_watts` — based on AveragePowerWatts for all
-///   rides that have power data.
-/// - `peak_np_watts` / `mean_np_watts` — based only on rides where
-///   NormalizedPowerWatts > 0, so rides synced before NP was added don't
-///   drag the numbers down to zero.
+/// - `peak_avg_watts` / `peak_np_watts` — highest single-ride value in the range.
+/// - `mean_avg_watts` / `mean_np_watts` — time-weighted average so longer rides
+///   contribute proportionally more than short ones:
+///   `SUM(watts * moving_time) / SUM(moving_time)`.
+///   NP stats only include rides where NormalizedPowerWatts > 0, so rides synced
+///   before NP was added don't drag the numbers down to zero.
 pub fn get_ride_stats(
     conn: &Connection,
     athlete_id: i64,
@@ -70,9 +71,13 @@ pub fn get_ride_stats(
     let row = conn.query_row(
         "SELECT
             MAX(AveragePowerWatts),
-            AVG(AveragePowerWatts),
+            SUM(AveragePowerWatts * MovingTimeSeconds) / NULLIF(SUM(MovingTimeSeconds), 0),
             COALESCE(MAX(CASE WHEN NormalizedPowerWatts > 0 THEN NormalizedPowerWatts END), 0.0),
-            COALESCE(AVG(CASE WHEN NormalizedPowerWatts > 0 THEN NormalizedPowerWatts END), 0.0)
+            COALESCE(
+                SUM(CASE WHEN NormalizedPowerWatts > 0 THEN NormalizedPowerWatts * MovingTimeSeconds END)
+                / NULLIF(SUM(CASE WHEN NormalizedPowerWatts > 0 THEN MovingTimeSeconds END), 0),
+                0.0
+            )
          FROM Rides
          WHERE AthleteId = ?1
            AND (?2 IS NULL OR StartDate >= ?2)
