@@ -14,11 +14,23 @@ async fn main() -> anyhow::Result<()> {
     // Initialize logging
     tracing_subscriber::fmt::init();
 
-    // Connect to the same SQLite DB the .NET API uses
-    // Adjust this path to point at your actual .db file
-    let db_path = std::env::var("DB_PATH")
-        .unwrap_or_else(|_| "../cycling-analyzer-api/CyclingAnalyzer.Api/cycling-analyzer.db"
-        .to_string());
+    // The database path must be set via the DB_PATH environment variable on the
+    // server. In development it falls back to the relative path used when running
+    // both services side-by-side from the repo root.
+    //
+    // On the server, set it like:
+    //   export DB_PATH=/opt/cycling-analyzer/cycling-analyzer.db
+    let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| {
+        let default = "../cycling-analyzer-api/CyclingAnalyzer.Api/cycling-analyzer.db"
+            .to_string();
+        tracing::warn!(
+            "DB_PATH env var not set — falling back to relative dev path: {}. \
+             This will fail on a server. Set DB_PATH to the absolute path of \
+             cycling-analyzer.db before deploying.",
+            default
+        );
+        default
+    });
 
     tracing::info!("Connecting to database at {db_path}");
 
